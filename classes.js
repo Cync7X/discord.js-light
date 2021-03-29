@@ -19,15 +19,48 @@ Discord.Structures.extend("Message", M => {
 				});
 			}
 		}
+		patch(data) {
+			const d = {};
+			for(const i in data) {
+				if(!["mentions", "mention_roles"].includes(i)) { d[i] = data[i]; }
+			}
+			const clone = super.patch(d);
+			if(data.mentions && data.mentions.length) {
+				this.mentions.users.clear();
+				this.mentions._members = [];
+				for(const mention of data.mentions) {
+					this.mentions.users.set(mention.id, this.client.users.add(mention, this.client.users.cache.has(mention.id)));
+					if(mention.member && this.guild) {
+						mention.member = Object.assign(mention.member, { user: mention });
+						if(this.client.users.cache.has(mention.id)) {
+							if(this.guild.members.cache.has(mention.id)) {
+								this.guild.members.cache.get(mention.id)._patch(mention.member);
+							} else {
+								this.guild.members.add(mention.member);
+							}
+						} else {
+							this.mentions._members.push(mention.member);
+						}
+					}
+				}
+			}
+			if(data.mention_roles && data.mention_roles.length && this.guild) {
+				this.mentions.roles.clear();
+				for(const role of data.mention_roles) {
+					this.mentions.roles.set(role, this.guild.roles.cache.get(role) || this.guild.roles.add({ id: role }, false));
+				}
+			}
+			return clone;
+		}
 		_patch(data) {
 			const d = {};
 			for(const i in data) {
 				if(!["author", "member", "mentions", "mention_roles"].includes(i)) { d[i] = data[i]; }
 			}
 			super._patch(d);
-			this.author = data.author ? this.client.users.add(data.author, this.client.options.fetchAllMembers || this.client.users.cache.has(data.author.id)) : null;
+			this.author = data.author ? this.client.users.add(data.author, this.client.options.cacheMembers || this.client.users.cache.has(data.author.id)) : null;
 			if(data.member && this.guild && this.author) {
-				const member = this.guild.members.add(Object.assign(data.member, { user: this.author }), this.client.options.fetchAllMembers || this.client.users.cache.has(data.author.id));
+				const member = this.guild.members.add(Object.assign(data.member, { user: this.author }), this.client.options.cacheMembers || this.client.users.cache.has(data.author.id));
 				if(!this.guild.members.cache.has(this.author.id)) {
 					this._member = member;
 				}
@@ -53,7 +86,10 @@ Discord.Structures.extend("Message", M => {
 			}
 			if(data.mention_roles && data.mention_roles.length && this.guild) {
 				for(const role of data.mention_roles) {
-					this.mentions.roles.set(role, this.guild.roles.cache.get(role) || this.guild.roles.add({ id: role }, false));
+					this.mentions.roles.set(role, this.guild.roles.cache.get(role) || this.guild.roles.add({
+						id: role,
+						permissions: 0
+					}, false));
 				}
 			}
 		}
@@ -95,7 +131,7 @@ Discord.Structures.extend("GuildMember", G => {
 			if(data.user) {
 				this._userID = data.user.id;
 				if(data.user.username) {
-					const user = this.client.users.add(data.user, data._cache || this.client.options.fetchAllMembers || this.client.users.cache.has(data.user.id));
+					const user = this.client.users.add(data.user, data._cache || this.client.options.cacheMembers || this.client.users.cache.has(data.user.id));
 					if(!this.client.users.cache.has(user.id)) {
 						this._user = user;
 					}
@@ -108,6 +144,12 @@ Discord.Structures.extend("GuildMember", G => {
 		get user() {
 			if(!this._userID) { return null; }
 			return this.client.users.cache.get(this._userID) || this._user || this.client.users.add({ id: this._userID }, false);
+		}
+		get presence() {
+			if(!this.guild.presences.cache.has(this.id) && this._presence) {
+				return this._presence;
+			}
+			return super.presence;
 		}
 	};
 });
@@ -140,7 +182,7 @@ Discord.Structures.extend("Guild", G => {
 			}
 			if(Array.isArray(data.members)) {
 				for(const member of data.members) {
-					if(this.client.users.cache.has(member.user.id) || this.client.options.fetchAllMembers) {
+					if(this.client.users.cache.has(member.user.id) || this.client.options.cacheMembers) {
 						this.members.add(member);
 					}
 				}
@@ -188,14 +230,14 @@ Discord.Structures.extend("Guild", G => {
 			if(!id) { throw new Error("FETCH_BAN_RESOLVE_ID"); }
 			return this.client.api.guilds(this.id).bans(id).get().then(ban => ({
 				reason: ban.reason,
-				user: this.client.users.add(ban.user, this.client.options.fetchAllMembers || this.client.users.cache.has(ban.user.id))
+				user: this.client.users.add(ban.user, this.client.options.cacheMembers || this.client.users.cache.has(ban.user.id))
 			}));
 		}
 		fetchBans() {
 			return this.client.api.guilds(this.id).bans.get().then(bans => bans.reduce((collection, ban) => {
 				collection.set(ban.user.id, {
 					reason: ban.reason,
-					user: this.client.users.add(ban.user, this.client.options.fetchAllMembers || this.client.users.cache.has(ban.user.id))
+					user: this.client.users.add(ban.user, this.client.options.cacheMembers || this.client.users.cache.has(ban.user.id))
 				});
 				return collection;
 			}, new Discord.Collection()));
@@ -585,7 +627,7 @@ Discord.GuildMemberManager.prototype.fetch = async function(id, cache) {
 		case "boolean": options.cache = id; break;
 		case "object": options = id || {}; break;
 	}
-	if(typeof options.user === "string" && typeof options.rest === "undefined") { options.rest = true; }
+	if(typeof options.user === "string" && typeof options.rest === "undefined" && !options.withPresences) { options.rest = true; }
 	if(typeof options.cache === "undefined") { options.cache = true; }
 	if(options.rest) {
 		if(typeof options.user === "string") {
@@ -644,13 +686,13 @@ Discord.GuildMemberManager.prototype.fetch = async function(id, cache) {
 				j(new Discord.DiscordAPIError("GUILD_MEMBERS_CHUNK", { message: "Unknown User" }, "Gateway"));
 				return;
 			}
-			if(this.cache.has(user_ids)) {
+			if(this.cache.has(user_ids) && (!presences || this.client.options.cachePresences) && !options.force) {
 				r(this.cache.get(user_ids));
 				return;
 			}
 		}
 		if(Array.isArray(user_ids)) {
-			if(user_ids.every(t => this.cache.has(t))) {
+			if(user_ids.every(t => this.cache.has(t)) && (!presences || this.client.options.cachePresences) && !options.force) {
 				r(user_ids.map(t => this.cache.get(t)));
 				return;
 			}
@@ -685,8 +727,11 @@ Discord.GuildMemberManager.prototype.fetch = async function(id, cache) {
 			}
 			if(presences && data.presences) {
 				for(const presence of data.presences) {
-					if(this.client.options.cachePresences || this.client.users.cache.has(presence.user.id)) {
-						this.guild.presences.add(Object.assign(presence, { guild: this.guild }));
+					const d = Object.assign(presence, { guild: this.guild });
+					if(options.cache || this.client.options.cachePresences || this.guild.presences.cache.has(presence.user.id) || this.client.users.cache.has(presence.user.id)) {
+						this.guild.presences.add(d);
+					} else {
+						fetched.get(presence.user.id)._presence = this.guild.presences.add(d, false);
 					}
 				}
 			}
@@ -834,7 +879,10 @@ Discord.MessageManager.prototype.forge = function(id) {
 
 Object.defineProperty(Discord.RoleManager.prototype, "everyone", {
 	get: function() {
-		return this.cache.get(this.guild.id) || this.guild.roles.add({ id: this.guild.id }, false);
+		return this.cache.get(this.guild.id) || this.guild.roles.add({
+			id: this.guild.id,
+			permissions: 0
+		}, false);
 	}
 });
 
@@ -844,7 +892,10 @@ Object.defineProperty(Discord.GuildMemberRoleManager.prototype, "_roles", {
 		const roles = new Discord.Collection();
 		roles.set(everyone.id, everyone);
 		for(const role of this.member._roles) {
-			roles.set(role, this.guild.roles.cache.get(role) || this.guild.roles.add({ id: role }, false));
+			roles.set(role, this.guild.roles.cache.get(role) || this.guild.roles.add({
+				id: role,
+				permissions: 0
+			}, false));
 		}
 		return roles;
 	}
@@ -854,7 +905,10 @@ Object.defineProperty(Discord.GuildEmojiRoleManager.prototype, "_roles", {
 	get: function() {
 		const roles = new Discord.Collection();
 		for(const role of this.emoji._roles) {
-			roles.set(role, this.guild.roles.cache.get(role) || this.guild.roles.add({ id: role }, false));
+			roles.set(role, this.guild.roles.cache.get(role) || this.guild.roles.add({
+				id: role,
+				permissions: 0
+			}, false));
 		}
 		return roles;
 	}

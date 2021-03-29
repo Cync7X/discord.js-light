@@ -26,12 +26,13 @@
 	},
 	"license": "Apache-2.0",
 	"dependencies": {
-		"discord.js": "github:Cync7X/discord.js"
+		"discord.js": "github:GiorgioBrux/discord.js"
 	},
 	"engines": {
-		"node": ">=15.0.0"
+		"node": ">=14.0.0"
 	},
 	"devDependencies": {
-		"eslint": "^7.16.0"
+		"@yarnpkg/pnpify": "^2.4.0",
+		"eslint": "^7.20.0"
 	}
 }
